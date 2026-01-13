@@ -36,8 +36,8 @@ impl Algorithm {
 }
 
 #[derive(Parser)]
-#[command(name = "jwt-tool")]
-#[command(about = "JWT token generator and verifier supporting PS256 and ES256 algorithms", long_about = None)]
+#[command(name = "jwtasym")]
+#[command(about = "JWT token generator and verifier supporting ES256 and PS256 algorithms", long_about = None)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -47,8 +47,8 @@ struct Cli {
 enum Commands {
     /// Generate a new keypair for JWT signing
     Keygen {
-        /// Algorithm to use (PS256 or ES256)
-        #[arg(short, long, value_enum, default_value = "ps256")]
+        /// Algorithm to use (ES256 or PS256)
+        #[arg(short, long, value_enum, default_value = "es256")]
         algorithm: Algorithm,
 
         /// Path to save the private key (PEM format)
@@ -66,8 +66,8 @@ enum Commands {
 
     /// Create a JWT token
     Create {
-        /// Algorithm to use (PS256 or ES256)
-        #[arg(short, long, value_enum, default_value = "ps256")]
+        /// Algorithm to use (ES256 or PS256)
+        #[arg(short, long, value_enum, default_value = "es256")]
         algorithm: Algorithm,
 
         /// Username for the preferred_username claim
@@ -136,6 +136,342 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_jwt_header_serialization() {
+        let header = JwtHeader {
+            alg: "PS256".to_string(),
+            typ: "JWT".to_string(),
+        };
+
+        let json = serde_json::to_string(&header).unwrap();
+        assert!(json.contains("\"alg\":\"PS256\""));
+        assert!(json.contains("\"typ\":\"JWT\""));
+
+        let deserialized: JwtHeader = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.alg, "PS256");
+        assert_eq!(deserialized.typ, "JWT");
+    }
+
+    #[test]
+    fn test_jwt_payload_serialization() {
+        let mut additional = serde_json::Map::new();
+        additional.insert(
+            "role".to_string(),
+            serde_json::Value::String("admin".to_string()),
+        );
+
+        let payload = JwtPayload {
+            preferred_username: "testuser".to_string(),
+            iat: 1000000,
+            exp: 2000000,
+            additional,
+        };
+
+        let json = serde_json::to_string(&payload).unwrap();
+        assert!(json.contains("\"preferred_username\":\"testuser\""));
+        assert!(json.contains("\"iat\":1000000"));
+        assert!(json.contains("\"exp\":2000000"));
+        assert!(json.contains("\"role\":\"admin\""));
+
+        let deserialized: JwtPayload = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.preferred_username, "testuser");
+        assert_eq!(deserialized.iat, 1000000);
+        assert_eq!(deserialized.exp, 2000000);
+        assert_eq!(deserialized.additional.get("role").unwrap(), "admin");
+    }
+
+    #[test]
+    fn test_base64_encoding_decoding() {
+        let test_data = b"Hello, World!";
+        let encoded = URL_SAFE_NO_PAD.encode(test_data);
+        let decoded = URL_SAFE_NO_PAD.decode(&encoded).unwrap();
+        assert_eq!(test_data, decoded.as_slice());
+    }
+
+    #[test]
+    fn test_algorithm_as_str() {
+        assert_eq!(Algorithm::PS256.as_str(), "PS256");
+        assert_eq!(Algorithm::ES256.as_str(), "ES256");
+    }
+
+    #[test]
+    fn test_ps256_token_creation_and_verification() {
+        // Generate a keypair
+        let mut rng = rand::thread_rng();
+        let private_key = RsaPrivateKey::new(&mut rng, 2048).unwrap();
+        let public_key = RsaPublicKey::from(&private_key);
+
+        let private_pem = private_key
+            .to_pkcs8_pem(rsa::pkcs8::LineEnding::LF)
+            .unwrap();
+        let public_pem = public_key
+            .to_public_key_pem(rsa::pkcs8::LineEnding::LF)
+            .unwrap();
+
+        // Create a token
+        let username = "testuser".to_string();
+        let iat = 1000000;
+        let exp = 2000000;
+        let additional = serde_json::Map::new();
+
+        let token = create_token_from_keys(
+            Algorithm::PS256,
+            username.clone(),
+            iat,
+            exp,
+            private_pem.as_str(),
+            additional,
+        )
+        .unwrap();
+
+        // Verify the token has 3 parts
+        let parts: Vec<&str> = token.split('.').collect();
+        assert_eq!(parts.len(), 3);
+
+        // Verify the token
+        let payload = verify_token_with_key(&token, &public_pem).unwrap();
+        assert_eq!(payload.preferred_username, username);
+        assert_eq!(payload.iat, iat);
+        assert_eq!(payload.exp, exp);
+    }
+
+    #[test]
+    fn test_es256_token_creation_and_verification() {
+        // Generate a keypair
+        let mut rng = rand::thread_rng();
+        let private_key = EcdsaSigningKey::random(&mut rng);
+        let public_key = private_key.verifying_key();
+
+        let private_pem = private_key
+            .to_pkcs8_pem(p256::pkcs8::LineEnding::LF)
+            .unwrap();
+        let public_pem = public_key
+            .to_public_key_pem(p256::pkcs8::LineEnding::LF)
+            .unwrap();
+
+        // Create a token
+        let username = "testuser".to_string();
+        let iat = 1000000;
+        let exp = 2000000;
+        let additional = serde_json::Map::new();
+
+        let token = create_token_from_keys(
+            Algorithm::ES256,
+            username.clone(),
+            iat,
+            exp,
+            private_pem.as_str(),
+            additional,
+        )
+        .unwrap();
+
+        // Verify the token has 3 parts
+        let parts: Vec<&str> = token.split('.').collect();
+        assert_eq!(parts.len(), 3);
+
+        // Verify the token
+        let payload = verify_token_with_key(&token, &public_pem).unwrap();
+        assert_eq!(payload.preferred_username, username);
+        assert_eq!(payload.iat, iat);
+        assert_eq!(payload.exp, exp);
+    }
+
+    #[test]
+    fn test_token_with_additional_claims() {
+        // Generate a keypair
+        let mut rng = rand::thread_rng();
+        let private_key = RsaPrivateKey::new(&mut rng, 2048).unwrap();
+        let public_key = RsaPublicKey::from(&private_key);
+
+        let private_pem = private_key
+            .to_pkcs8_pem(rsa::pkcs8::LineEnding::LF)
+            .unwrap();
+        let public_pem = public_key
+            .to_public_key_pem(rsa::pkcs8::LineEnding::LF)
+            .unwrap();
+
+        // Create a token with additional claims
+        let username = "testuser".to_string();
+        let iat = 1000000;
+        let exp = 2000000;
+        let mut additional = serde_json::Map::new();
+        additional.insert(
+            "role".to_string(),
+            serde_json::Value::String("admin".to_string()),
+        );
+        additional.insert(
+            "department".to_string(),
+            serde_json::Value::String("engineering".to_string()),
+        );
+
+        let token = create_token_from_keys(
+            Algorithm::PS256,
+            username.clone(),
+            iat,
+            exp,
+            private_pem.as_str(),
+            additional.clone(),
+        )
+        .unwrap();
+
+        // Verify the token
+        let payload = verify_token_with_key(&token, &public_pem).unwrap();
+        assert_eq!(payload.preferred_username, username);
+        assert_eq!(payload.iat, iat);
+        assert_eq!(payload.exp, exp);
+        assert_eq!(payload.additional.get("role").unwrap(), "admin");
+        assert_eq!(payload.additional.get("department").unwrap(), "engineering");
+    }
+
+    #[test]
+    fn test_invalid_token_format() {
+        let public_pem = "dummy_key";
+        let result = verify_token_with_key("invalid.token", public_pem);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid JWT format"));
+    }
+
+    #[test]
+    fn test_invalid_signature() {
+        // Generate two different keypairs
+        let mut rng = rand::thread_rng();
+        let private_key1 = RsaPrivateKey::new(&mut rng, 2048).unwrap();
+        let private_key2 = RsaPrivateKey::new(&mut rng, 2048).unwrap();
+        let public_key2 = RsaPublicKey::from(&private_key2);
+
+        let private_pem1 = private_key1
+            .to_pkcs8_pem(rsa::pkcs8::LineEnding::LF)
+            .unwrap();
+        let public_pem2 = public_key2
+            .to_public_key_pem(rsa::pkcs8::LineEnding::LF)
+            .unwrap();
+
+        // Create a token with private key 1
+        let token = create_token_from_keys(
+            Algorithm::PS256,
+            "testuser".to_string(),
+            1000000,
+            2000000,
+            private_pem1.as_str(),
+            serde_json::Map::new(),
+        )
+        .unwrap();
+
+        // Try to verify with public key 2 (should fail)
+        let result = verify_token_with_key(&token, &public_pem2);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("verification failed"));
+    }
+
+    #[test]
+    fn test_tampered_token() {
+        // Generate a keypair
+        let mut rng = rand::thread_rng();
+        let private_key = RsaPrivateKey::new(&mut rng, 2048).unwrap();
+        let public_key = RsaPublicKey::from(&private_key);
+
+        let private_pem = private_key
+            .to_pkcs8_pem(rsa::pkcs8::LineEnding::LF)
+            .unwrap();
+        let public_pem = public_key
+            .to_public_key_pem(rsa::pkcs8::LineEnding::LF)
+            .unwrap();
+
+        // Create a token
+        let token = create_token_from_keys(
+            Algorithm::PS256,
+            "testuser".to_string(),
+            1000000,
+            2000000,
+            private_pem.as_str(),
+            serde_json::Map::new(),
+        )
+        .unwrap();
+
+        // Tamper with the token by modifying the payload
+        let parts: Vec<&str> = token.split('.').collect();
+        let tampered_payload = URL_SAFE_NO_PAD.encode(b"tampered_data");
+        let tampered_token = format!("{}.{}.{}", parts[0], tampered_payload, parts[2]);
+
+        // Verification should fail
+        let result = verify_token_with_key(&tampered_token, &public_pem);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_unsupported_algorithm() {
+        // Create a token with an unsupported algorithm
+        let header = JwtHeader {
+            alg: "HS256".to_string(),
+            typ: "JWT".to_string(),
+        };
+        let payload = JwtPayload {
+            preferred_username: "testuser".to_string(),
+            iat: 1000000,
+            exp: 2000000,
+            additional: serde_json::Map::new(),
+        };
+
+        let header_json = serde_json::to_string(&header).unwrap();
+        let payload_json = serde_json::to_string(&payload).unwrap();
+
+        let header_b64 = URL_SAFE_NO_PAD.encode(header_json.as_bytes());
+        let payload_b64 = URL_SAFE_NO_PAD.encode(payload_json.as_bytes());
+        let signature_b64 = URL_SAFE_NO_PAD.encode(b"fake_signature");
+
+        let token = format!("{}.{}.{}", header_b64, payload_b64, signature_b64);
+
+        let result = verify_token_with_key(&token, "dummy_key");
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Unsupported algorithm"));
+    }
+
+    #[test]
+    fn test_ps256_es256_cross_verification_fails() {
+        // Generate PS256 keypair
+        let mut rng = rand::thread_rng();
+        let rsa_private = RsaPrivateKey::new(&mut rng, 2048).unwrap();
+        let rsa_private_pem = rsa_private
+            .to_pkcs8_pem(rsa::pkcs8::LineEnding::LF)
+            .unwrap();
+
+        // Generate ES256 keypair
+        let ec_private = EcdsaSigningKey::random(&mut rng);
+        let ec_public = ec_private.verifying_key();
+        let ec_public_pem = ec_public
+            .to_public_key_pem(p256::pkcs8::LineEnding::LF)
+            .unwrap();
+
+        // Create PS256 token
+        let token = create_token_from_keys(
+            Algorithm::PS256,
+            "testuser".to_string(),
+            1000000,
+            2000000,
+            rsa_private_pem.as_str(),
+            serde_json::Map::new(),
+        )
+        .unwrap();
+
+        // Try to verify PS256 token with ES256 public key (should fail)
+        let result = verify_token_with_key(&token, &ec_public_pem);
+        assert!(result.is_err());
+    }
+}
+
 fn generate_keypair(
     algorithm: Algorithm,
     private_path: PathBuf,
@@ -192,38 +528,25 @@ fn generate_keypair(
     Ok(())
 }
 
-fn create_token(
+fn create_token_from_keys(
     algorithm: Algorithm,
     username: String,
-    expiry_seconds: u64,
-    private_key_path: PathBuf,
-    additional_claims: Option<String>,
-) -> Result<()> {
+    iat: u64,
+    exp: u64,
+    private_key_pem: &str,
+    additional: serde_json::Map<String, serde_json::Value>,
+) -> Result<String> {
     // Create header
     let header = JwtHeader {
         alg: algorithm.as_str().to_string(),
         typ: "JWT".to_string(),
     };
 
-    // Get current timestamp
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .context("System time error")?
-        .as_secs();
-
-    // Parse additional claims if provided
-    let additional: serde_json::Map<String, serde_json::Value> =
-        if let Some(claims_json) = additional_claims {
-            serde_json::from_str(&claims_json).context("Failed to parse additional claims JSON")?
-        } else {
-            serde_json::Map::new()
-        };
-
     // Create payload
     let payload = JwtPayload {
         preferred_username: username,
-        iat: now,
-        exp: now + expiry_seconds,
+        iat,
+        exp,
         additional,
     };
 
@@ -241,9 +564,7 @@ fn create_token(
     let signature_b64 = match algorithm {
         Algorithm::PS256 => {
             // Load RSA private key
-            let private_pem =
-                fs::read_to_string(&private_key_path).context("Failed to read private key file")?;
-            let private_key = RsaPrivateKey::from_pkcs8_pem(&private_pem)
+            let private_key = RsaPrivateKey::from_pkcs8_pem(private_key_pem)
                 .context("Failed to parse RSA private key")?;
 
             // Sign with PS256
@@ -256,9 +577,7 @@ fn create_token(
         }
         Algorithm::ES256 => {
             // Load ECDSA private key
-            let private_pem =
-                fs::read_to_string(&private_key_path).context("Failed to read private key file")?;
-            let private_key = EcdsaSigningKey::from_pkcs8_pem(&private_pem)
+            let private_key = EcdsaSigningKey::from_pkcs8_pem(private_key_pem)
                 .context("Failed to parse ECDSA private key")?;
 
             // Sign with ES256
@@ -272,13 +591,51 @@ fn create_token(
     // Create final JWT
     let jwt = format!("{}.{}", signing_input, signature_b64);
 
+    Ok(jwt)
+}
+
+fn create_token(
+    algorithm: Algorithm,
+    username: String,
+    expiry_seconds: u64,
+    private_key_path: PathBuf,
+    additional_claims: Option<String>,
+) -> Result<()> {
+    // Get current timestamp
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("System time error")?
+        .as_secs();
+
+    // Parse additional claims if provided
+    let additional: serde_json::Map<String, serde_json::Value> =
+        if let Some(claims_json) = additional_claims {
+            serde_json::from_str(&claims_json).context("Failed to parse additional claims JSON")?
+        } else {
+            serde_json::Map::new()
+        };
+
+    // Load private key
+    let private_pem =
+        fs::read_to_string(&private_key_path).context("Failed to read private key file")?;
+
+    // Create token
+    let jwt = create_token_from_keys(
+        algorithm,
+        username,
+        now,
+        now + expiry_seconds,
+        &private_pem,
+        additional,
+    )?;
+
     println!("✓ JWT token created successfully:");
     println!("{}", jwt);
 
     Ok(())
 }
 
-fn verify_token(token: String, public_key_path: PathBuf) -> Result<()> {
+fn verify_token_with_key(token: &str, public_key_pem: &str) -> Result<JwtPayload> {
     // Split token into parts
     let parts: Vec<&str> = token.split('.').collect();
     if parts.len() != 3 {
@@ -327,9 +684,7 @@ fn verify_token(token: String, public_key_path: PathBuf) -> Result<()> {
                 .context("Failed to parse RSA signature")?;
 
             // Load RSA public key
-            let public_pem =
-                fs::read_to_string(&public_key_path).context("Failed to read public key file")?;
-            let public_key = RsaPublicKey::from_public_key_pem(&public_pem)
+            let public_key = RsaPublicKey::from_public_key_pem(public_key_pem)
                 .context("Failed to parse RSA public key")?;
 
             // Verify signature
@@ -341,9 +696,7 @@ fn verify_token(token: String, public_key_path: PathBuf) -> Result<()> {
                 .context("Failed to parse ECDSA signature")?;
 
             // Load ECDSA public key
-            let public_pem =
-                fs::read_to_string(&public_key_path).context("Failed to read public key file")?;
-            let public_key = EcdsaVerifyingKey::from_public_key_pem(&public_pem)
+            let public_key = EcdsaVerifyingKey::from_public_key_pem(public_key_pem)
                 .context("Failed to parse ECDSA public key")?;
 
             // Verify signature
@@ -352,43 +705,49 @@ fn verify_token(token: String, public_key_path: PathBuf) -> Result<()> {
         }
     };
 
-    match verification_result {
-        Ok(_) => {
-            println!("✓ Token signature is valid!");
+    verification_result.context("Token signature verification failed")?;
 
-            // Check expiry
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .context("System time error")?
-                .as_secs();
+    Ok(payload)
+}
 
-            if now > payload.exp {
-                println!("⚠ Warning: Token has expired!");
-                println!("  Expired at: {} (current time: {})", payload.exp, now);
-            } else {
-                println!("✓ Token is not expired");
-                println!(
-                    "  Expires at: {} (in {} seconds)",
-                    payload.exp,
-                    payload.exp - now
-                );
-            }
+fn verify_token(token: String, public_key_path: PathBuf) -> Result<()> {
+    // Load public key
+    let public_pem =
+        fs::read_to_string(&public_key_path).context("Failed to read public key file")?;
 
-            // Display claims
-            println!("\nToken claims:");
-            println!("  preferred_username: {}", payload.preferred_username);
-            println!("  issued_at: {}", payload.iat);
-            println!("  expires_at: {}", payload.exp);
+    // Verify token
+    let payload = verify_token_with_key(&token, &public_pem)?;
 
-            if !payload.additional.is_empty() {
-                println!("  Additional claims:");
-                for (key, value) in payload.additional.iter() {
-                    println!("    {}: {}", key, value);
-                }
-            }
-        }
-        Err(e) => {
-            anyhow::bail!("✗ Token signature verification failed: {}", e);
+    println!("✓ Token signature is valid!");
+
+    // Check expiry
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("System time error")?
+        .as_secs();
+
+    if now > payload.exp {
+        println!("⚠ Warning: Token has expired!");
+        println!("  Expired at: {} (current time: {})", payload.exp, now);
+    } else {
+        println!("✓ Token is not expired");
+        println!(
+            "  Expires at: {} (in {} seconds)",
+            payload.exp,
+            payload.exp - now
+        );
+    }
+
+    // Display claims
+    println!("\nToken claims:");
+    println!("  preferred_username: {}", payload.preferred_username);
+    println!("  issued_at: {}", payload.iat);
+    println!("  expires_at: {}", payload.exp);
+
+    if !payload.additional.is_empty() {
+        println!("  Additional claims:");
+        for (key, value) in payload.additional.iter() {
+            println!("    {}: {}", key, value);
         }
     }
 
