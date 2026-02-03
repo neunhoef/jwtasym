@@ -110,8 +110,7 @@ struct JwtHeader {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct JwtPayload {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    preferred_username: Option<String>,
+    preferred_username: String,
     iss: String,
     iat: u64,
     exp: u64,
@@ -172,7 +171,7 @@ mod tests {
         );
 
         let payload = JwtPayload {
-            preferred_username: Some("testuser".to_string()),
+            preferred_username: "testuser".to_string(),
             iss: "arangodb".to_string(),
             iat: 1000000,
             exp: 2000000,
@@ -187,10 +186,7 @@ mod tests {
         assert!(json.contains("\"role\":\"admin\""));
 
         let deserialized: JwtPayload = serde_json::from_str(&json).unwrap();
-        assert_eq!(
-            deserialized.preferred_username,
-            Some("testuser".to_string())
-        );
+        assert_eq!(deserialized.preferred_username, "testuser");
         assert_eq!(deserialized.iss, "arangodb");
         assert_eq!(deserialized.iat, 1000000);
         assert_eq!(deserialized.exp, 2000000);
@@ -248,7 +244,7 @@ mod tests {
 
         // Verify the token
         let payload = verify_token_with_key(&token, &public_pem).unwrap();
-        assert_eq!(payload.preferred_username, Some(username));
+        assert_eq!(payload.preferred_username, username);
         assert_eq!(payload.iss, "arangodb");
         assert_eq!(payload.iat, iat);
         assert_eq!(payload.exp, exp);
@@ -291,7 +287,7 @@ mod tests {
 
         // Verify the token
         let payload = verify_token_with_key(&token, &public_pem).unwrap();
-        assert_eq!(payload.preferred_username, Some(username));
+        assert_eq!(payload.preferred_username, username);
         assert_eq!(payload.iss, "arangodb");
         assert_eq!(payload.iat, iat);
         assert_eq!(payload.exp, exp);
@@ -338,7 +334,7 @@ mod tests {
 
         // Verify the token
         let payload = verify_token_with_key(&token, &public_pem).unwrap();
-        assert_eq!(payload.preferred_username, Some(username));
+        assert_eq!(payload.preferred_username, username);
         assert_eq!(payload.iss, "arangodb");
         assert_eq!(payload.iat, iat);
         assert_eq!(payload.exp, exp);
@@ -437,7 +433,7 @@ mod tests {
             typ: "JWT".to_string(),
         };
         let payload = JwtPayload {
-            preferred_username: Some("testuser".to_string()),
+            preferred_username: "testuser".to_string(),
             iss: "arangodb".to_string(),
             iat: 1000000,
             exp: 2000000,
@@ -567,14 +563,8 @@ fn create_token_from_keys(
     };
 
     // Create payload
-    let preferred_username = if username.is_empty() {
-        None
-    } else {
-        Some(username)
-    };
-
     let payload = JwtPayload {
-        preferred_username,
+        preferred_username: username,
         iss,
         iat,
         exp,
@@ -773,9 +763,7 @@ fn verify_token(token: String, public_key_path: PathBuf) -> Result<()> {
 
     // Display claims
     println!("\nToken claims:");
-    if let Some(username) = &payload.preferred_username {
-        println!("  preferred_username: {}", username);
-    }
+    println!("  preferred_username: {}", payload.preferred_username);
     println!("  iss: {}", payload.iss);
     println!("  issued_at: {}", payload.iat);
     println!("  expires_at: {}", payload.exp);
