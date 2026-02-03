@@ -71,7 +71,7 @@ enum Commands {
         algorithm: Algorithm,
 
         /// Username for the preferred_username claim
-        #[arg(short, long)]
+        #[arg(short, long, default_value = "")]
         username: String,
 
         /// Token expiry duration in seconds
@@ -85,6 +85,10 @@ enum Commands {
         /// Additional claims as JSON (optional)
         #[arg(short, long)]
         claims: Option<String>,
+
+        /// Issuer claim (iss)
+        #[arg(long, default_value = "arangodb")]
+        iss: String,
     },
 
     /// Verify a JWT token
@@ -106,7 +110,9 @@ struct JwtHeader {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct JwtPayload {
-    preferred_username: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    preferred_username: Option<String>,
+    iss: String,
     iat: u64,
     exp: u64,
     #[serde(flatten)]
@@ -129,7 +135,8 @@ fn main() -> Result<()> {
             expiry,
             private_key,
             claims,
-        } => create_token(algorithm, username, expiry, private_key, claims)?,
+            iss,
+        } => create_token(algorithm, username, expiry, private_key, claims, iss)?,
         Commands::Verify { token, public_key } => verify_token(token, public_key)?,
     }
 
@@ -165,7 +172,8 @@ mod tests {
         );
 
         let payload = JwtPayload {
-            preferred_username: "testuser".to_string(),
+            preferred_username: Some("testuser".to_string()),
+            iss: "arangodb".to_string(),
             iat: 1000000,
             exp: 2000000,
             additional,
@@ -173,12 +181,17 @@ mod tests {
 
         let json = serde_json::to_string(&payload).unwrap();
         assert!(json.contains("\"preferred_username\":\"testuser\""));
+        assert!(json.contains("\"iss\":\"arangodb\""));
         assert!(json.contains("\"iat\":1000000"));
         assert!(json.contains("\"exp\":2000000"));
         assert!(json.contains("\"role\":\"admin\""));
 
         let deserialized: JwtPayload = serde_json::from_str(&json).unwrap();
-        assert_eq!(deserialized.preferred_username, "testuser");
+        assert_eq!(
+            deserialized.preferred_username,
+            Some("testuser".to_string())
+        );
+        assert_eq!(deserialized.iss, "arangodb");
         assert_eq!(deserialized.iat, 1000000);
         assert_eq!(deserialized.exp, 2000000);
         assert_eq!(deserialized.additional.get("role").unwrap(), "admin");
@@ -225,6 +238,7 @@ mod tests {
             exp,
             private_pem.as_str(),
             additional,
+            "arangodb".to_string(),
         )
         .unwrap();
 
@@ -234,7 +248,8 @@ mod tests {
 
         // Verify the token
         let payload = verify_token_with_key(&token, &public_pem).unwrap();
-        assert_eq!(payload.preferred_username, username);
+        assert_eq!(payload.preferred_username, Some(username));
+        assert_eq!(payload.iss, "arangodb");
         assert_eq!(payload.iat, iat);
         assert_eq!(payload.exp, exp);
     }
@@ -266,6 +281,7 @@ mod tests {
             exp,
             private_pem.as_str(),
             additional,
+            "arangodb".to_string(),
         )
         .unwrap();
 
@@ -275,7 +291,8 @@ mod tests {
 
         // Verify the token
         let payload = verify_token_with_key(&token, &public_pem).unwrap();
-        assert_eq!(payload.preferred_username, username);
+        assert_eq!(payload.preferred_username, Some(username));
+        assert_eq!(payload.iss, "arangodb");
         assert_eq!(payload.iat, iat);
         assert_eq!(payload.exp, exp);
     }
@@ -315,12 +332,14 @@ mod tests {
             exp,
             private_pem.as_str(),
             additional.clone(),
+            "arangodb".to_string(),
         )
         .unwrap();
 
         // Verify the token
         let payload = verify_token_with_key(&token, &public_pem).unwrap();
-        assert_eq!(payload.preferred_username, username);
+        assert_eq!(payload.preferred_username, Some(username));
+        assert_eq!(payload.iss, "arangodb");
         assert_eq!(payload.iat, iat);
         assert_eq!(payload.exp, exp);
         assert_eq!(payload.additional.get("role").unwrap(), "admin");
@@ -361,6 +380,7 @@ mod tests {
             2000000,
             private_pem1.as_str(),
             serde_json::Map::new(),
+            "arangodb".to_string(),
         )
         .unwrap();
 
@@ -395,6 +415,7 @@ mod tests {
             2000000,
             private_pem.as_str(),
             serde_json::Map::new(),
+            "arangodb".to_string(),
         )
         .unwrap();
 
@@ -416,7 +437,8 @@ mod tests {
             typ: "JWT".to_string(),
         };
         let payload = JwtPayload {
-            preferred_username: "testuser".to_string(),
+            preferred_username: Some("testuser".to_string()),
+            iss: "arangodb".to_string(),
             iat: 1000000,
             exp: 2000000,
             additional: serde_json::Map::new(),
@@ -463,6 +485,7 @@ mod tests {
             2000000,
             rsa_private_pem.as_str(),
             serde_json::Map::new(),
+            "arangodb".to_string(),
         )
         .unwrap();
 
@@ -535,6 +558,7 @@ fn create_token_from_keys(
     exp: u64,
     private_key_pem: &str,
     additional: serde_json::Map<String, serde_json::Value>,
+    iss: String,
 ) -> Result<String> {
     // Create header
     let header = JwtHeader {
@@ -543,8 +567,15 @@ fn create_token_from_keys(
     };
 
     // Create payload
+    let preferred_username = if username.is_empty() {
+        None
+    } else {
+        Some(username)
+    };
+
     let payload = JwtPayload {
-        preferred_username: username,
+        preferred_username,
+        iss,
         iat,
         exp,
         additional,
@@ -600,6 +631,7 @@ fn create_token(
     expiry_seconds: u64,
     private_key_path: PathBuf,
     additional_claims: Option<String>,
+    iss: String,
 ) -> Result<()> {
     // Get current timestamp
     let now = SystemTime::now()
@@ -627,6 +659,7 @@ fn create_token(
         now + expiry_seconds,
         &private_pem,
         additional,
+        iss,
     )?;
 
     println!("✓ JWT token created successfully:");
@@ -740,7 +773,10 @@ fn verify_token(token: String, public_key_path: PathBuf) -> Result<()> {
 
     // Display claims
     println!("\nToken claims:");
-    println!("  preferred_username: {}", payload.preferred_username);
+    if let Some(username) = &payload.preferred_username {
+        println!("  preferred_username: {}", username);
+    }
+    println!("  iss: {}", payload.iss);
     println!("  issued_at: {}", payload.iat);
     println!("  expires_at: {}", payload.exp);
 
