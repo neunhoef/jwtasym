@@ -702,7 +702,6 @@ fn create_token(
         server_id,
     )?;
 
-    println!("✓ JWT token created successfully:");
     println!("{}", jwt);
 
     Ok(())
